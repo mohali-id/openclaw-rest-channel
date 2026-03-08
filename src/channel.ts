@@ -75,9 +75,27 @@ function resolveAccount(
   const rest = getChannelConfig(cfg);
   const id = accountId ?? "default";
   const raw = rest?.accounts?.[id];
-  if (!raw) return undefined;
-  if (raw.enabled === false) return undefined;
-  return { ...raw, accountId: id };
+  if (raw) {
+    if (raw.enabled === false) return undefined;
+    return { ...raw, accountId: id };
+  }
+
+  // The requested ID does not match any configured account name.
+  // This happens when OpenClaw's CLI passes a *target* (recipient /
+  // conversation UUID) as accountId – e.g.:
+  //   openclaw message send --channel rest --target <uuid>
+  //
+  // Fall back to the "default" account, or the first enabled account
+  // if "default" doesn't exist, so the message can still be delivered.
+  const fallbackId = rest?.accounts?.["default"]
+    ? "default"
+    : Object.keys(rest?.accounts ?? {}).find(
+        (k) => rest!.accounts![k].enabled !== false,
+      );
+  if (!fallbackId) return undefined;
+  const fallback = rest!.accounts![fallbackId];
+  if (fallback.enabled === false) return undefined;
+  return { ...fallback, accountId: fallbackId };
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +141,7 @@ const restChannelPlugin = {
 
   capabilities: {
     chatTypes: ["direct", "group"] as string[],
+    media: true,
   },
 
   reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
@@ -134,16 +153,16 @@ const restChannelPlugin = {
       resolveAccount(cfg, accountId),
 
     inspectAccount: (cfg: Record<string, unknown>, accountId?: string | null) => {
-      const rest = getChannelConfig(cfg);
-      const id = accountId ?? "default";
-      const raw = rest?.accounts?.[id];
-      if (!raw) return { accountId: id, configured: false, enabled: false };
+      const resolved = resolveAccount(cfg, accountId);
+      if (!resolved) {
+        return { accountId: accountId ?? "default", configured: false, enabled: false };
+      }
       return {
-        accountId: id,
+        accountId: resolved.accountId,
         configured: true,
-        enabled: raw.enabled !== false,
-        webhookUrl: raw.webhookUrl ? "configured" : "not set",
-        apiKeyStatus: raw.apiKey ? "available" : "not set",
+        enabled: true,
+        webhookUrl: resolved.webhookUrl ? "configured" : "not set",
+        apiKeyStatus: resolved.apiKey ? "available" : "not set",
       };
     },
   },
@@ -169,7 +188,7 @@ const restChannelPlugin = {
         text: params.text,
         logger,
       });
-    },
+    }
   },
 
   // -------------------------------------------------------------------------
@@ -370,14 +389,34 @@ const restChannelPlugin = {
             ctx: msgCtx,
             cfg: currentCfg,
             dispatcherOptions: {
-              deliver: async (payload: { text?: string; body?: string }) => {
-                const text = payload?.text ?? payload?.body;
-                if (text) {
+              deliver: async (payload: {
+                text?: string;
+                body?: string;
+                mediaUrl?: string;
+                mediaUrls?: string[];
+              }) => {
+                const text = payload?.text ?? payload?.body ?? "";
+                const mediaPaths = payload?.mediaUrls?.length
+                  ? payload.mediaUrls
+                  : payload?.mediaUrl
+                    ? [payload.mediaUrl]
+                    : [];
+
+                // Resolve the OpenClaw state directory so relative media
+                // paths (like ./media/inbound/...) resolve correctly even
+                // when process.cwd() points elsewhere (e.g. C:\Windows\System32
+                // on Windows services).
+                const stateDir = rt.state.resolveStateDir();
+
+                // Deliver if there is text or media (or both)
+                if (text || mediaPaths.length > 0) {
                   await deliverOutbound({
                     account: resolvedAccount,
                     conversationId: message.conversationId ?? message.senderId,
                     recipientId: message.senderId,
                     text,
+                    mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+                    stateDir,
                     logger: {
                       info: (...a: unknown[]) => log?.info?.(...a),
                       warn: (...a: unknown[]) => log?.warn?.(...a),
@@ -435,46 +474,4 @@ const restChannelPlugin = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// Plugin registration (object shape with id + register)
-// ---------------------------------------------------------------------------
-
-const plugin = {
-  id: "openclaw-rest-channel",
-  name: "REST Channel",
-  description:
-    "A minimal REST-based channel plugin for OpenClaw. Connect any external web application via simple HTTP requests.",
-
-  register(api: OpenClawPluginApi) {
-    // Store the runtime reference for later use by the channel adapter
-    setRestRuntime(api.runtime);
-
-    // Register the REST channel
-    api.registerChannel({ plugin: restChannelPlugin as any });
-
-    // Register a status RPC method
-    api.registerGatewayMethod("rest-channel.status", ({ respond }) => {
-      const accounts = listAccountIds(api.config).map((id) => {
-        const acct = resolveAccount(api.config, id);
-        return {
-          accountId: id,
-          enabled: !!acct,
-          hasWebhookUrl: !!acct?.webhookUrl,
-          hasApiKey: !!acct?.apiKey,
-          inboundPath: acct?.inboundPath ?? DEFAULT_PATH,
-        };
-      });
-
-      respond(true, {
-        channel: CHANNEL_ID,
-        accounts,
-      });
-    });
-
-    api.logger.info(
-      `[rest-channel] Plugin loaded – ${listAccountIds(api.config).length} account(s) configured`,
-    );
-  },
-};
-
-export default plugin;
+export { restChannelPlugin, resolveAccount, listAccountIds, CHANNEL_ID, DEFAULT_PATH };
