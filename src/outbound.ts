@@ -52,6 +52,13 @@ export interface DeliverOutboundOptions {
 }
 
 /**
+ * Check whether a string is an HTTP(S) or data URL rather than a local path.
+ */
+function isUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value) || /^data:/i.test(value);
+}
+
+/**
  * Convert a local file path to a data-URL (e.g. `data:image/png;base64,...`).
  */
 async function fileToDataUrl(
@@ -76,6 +83,39 @@ async function fileToDataUrl(
 }
 
 /**
+ * Resolve a single media reference to an OutboundAttachment.
+ *
+ * - HTTP(S) and data URLs are passed through directly.
+ * - Local file paths are read from disk and embedded as base64 data-URLs.
+ */
+async function resolveMediaAttachment(
+  mediaRef: string,
+  stateDir: string | undefined,
+  logger: { warn: (...a: unknown[]) => void },
+): Promise<OutboundAttachment | null> {
+  // Remote or data URLs – pass through as-is
+  if (isUrl(mediaRef)) {
+    // Try to guess MIME from the URL path portion
+    let mimeType: string | undefined;
+    let filename: string | undefined;
+    try {
+      const pathname = new URL(mediaRef).pathname;
+      mimeType = guessMime(pathname);
+      filename = basename(pathname) || undefined;
+    } catch {
+      // Not a parseable URL (e.g. malformed data-URL) – skip metadata
+    }
+    return { url: mediaRef, mimeType, filename };
+  }
+
+  // Local file path – resolve relative paths against stateDir, then embed
+  const resolved = isAbsolute(mediaRef)
+    ? mediaRef
+    : resolve(stateDir ?? process.cwd(), mediaRef);
+  return fileToDataUrl(resolved, logger);
+}
+
+/**
  * Deliver an outbound assistant reply to the configured webhook URL.
  *
  * Media files referenced by local paths are read from disk and embedded as
@@ -96,16 +136,13 @@ export async function deliverOutbound(
     return { ok: false, error: "No webhookUrl configured" };
   }
 
-  // Convert local media paths to data-URL attachments.
-  // Relative paths (e.g. ./media/inbound/...) are resolved against the
-  // OpenClaw state directory so they work regardless of process.cwd().
+  // Resolve media references to webhook attachments.
+  // HTTP(S) / data URLs are passed through directly; local file paths
+  // are read from disk and embedded as base64 data-URLs.
   let attachments: OutboundAttachment[] | undefined;
   if (mediaPaths && mediaPaths.length > 0) {
-    const resolvedPaths = mediaPaths.map((p) =>
-      isAbsolute(p) ? p : resolve(stateDir ?? process.cwd(), p),
-    );
     const results = await Promise.all(
-      resolvedPaths.map((p) => fileToDataUrl(p, logger)),
+      mediaPaths.map((p) => resolveMediaAttachment(p, stateDir, logger)),
     );
     const valid = results.filter(
       (a): a is OutboundAttachment => a !== null,
