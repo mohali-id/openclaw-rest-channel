@@ -1,0 +1,62 @@
+{
+  "name": "openclaw-rest-channel",
+  "version": "1.0.0",
+  "description": "A minimal REST-based channel plugin for OpenClaw. Integrate any external web application with OpenClaw using simple HTTP requests.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "author": "",
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "channel",
+    "rest",
+    "api",
+    "webhook",
+    "chatbot",
+    "ai"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "rest",
+      "label": "REST",
+      "selectionLabel": "REST (HTTP API)",
+      "docsPath": "/channels/rest",
+      "docsLabel": "rest",
+      "blurb": "Connect any external app to OpenClaw via simple HTTP requests.",
+      "order": 90,
+      "aliases": [
+        "rest-api",
+        "http"
+      ]
+    },
+    "install": {
+      "npmSpec": "openclaw-rest-channel",
+      "defaultChoice": "npm"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run build",
+    "lint": "tsc --noEmit"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "devDependencies": {
+    "openclaw": "latest",
+    "typescript": "^5.8.0",
+    "rimraf": "^6.0.0"
+  }
+}

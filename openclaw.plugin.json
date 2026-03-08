@@ -1,0 +1,48 @@
+{
+  "id": "rest-channel",
+  "name": "REST Channel",
+  "description": "A minimal REST-based channel plugin for OpenClaw. Connect any external web application via simple HTTP requests.",
+  "version": "1.0.0",
+  "channels": ["rest"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webhookUrl": {
+        "type": "string",
+        "description": "URL where OpenClaw sends outbound messages (assistant replies). Your app must accept POST requests at this URL."
+      },
+      "webhookSecret": {
+        "type": "string",
+        "description": "Shared secret for signing outbound webhook payloads (HMAC-SHA256). Set this to verify that requests to your webhook actually come from OpenClaw."
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "API key that external clients must include when sending inbound messages to OpenClaw. Acts as bearer token authentication."
+      },
+      "inboundPath": {
+        "type": "string",
+        "default": "/rest/inbound",
+        "description": "HTTP path on the Gateway where inbound messages are received."
+      }
+    }
+  },
+  "uiHints": {
+    "webhookUrl": {
+      "label": "Webhook URL",
+      "placeholder": "https://your-app.example.com/openclaw/webhook"
+    },
+    "webhookSecret": {
+      "label": "Webhook Secret",
+      "sensitive": true
+    },
+    "apiKey": {
+      "label": "Inbound API Key",
+      "sensitive": true
+    },
+    "inboundPath": {
+      "label": "Inbound Path",
+      "placeholder": "/rest/inbound"
+    }
+  }
+}
