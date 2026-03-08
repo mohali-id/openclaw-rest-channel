@@ -1,5 +1,5 @@
 {
-  "id": "rest-channel",
+  "id": "openclaw-rest-channel",
   "name": "REST Channel",
   "description": "A minimal REST-based channel plugin for OpenClaw. Connect any external web application via simple HTTP requests.",
   "version": "1.0.0",
