@@ -57,6 +57,9 @@ export async function POST(req: NextRequest) {
       },
     };
 
+    console.log(`[send] Forwarding message ${userMessage.id} to OpenClaw Gateway for conversation ${conversationId}`);
+    console.log("Inbound payload:", inboundPayload);
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };

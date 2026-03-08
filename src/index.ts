@@ -5,7 +5,10 @@
 // A minimal REST-based channel plugin for OpenClaw.
 //
 // Inbound:  External apps POST JSON to the Gateway HTTP endpoint.
-// Outbound: OpenClaw POSTs assistant replies to your configured webhookUrl.
+//           The message is routed through OpenClaw's AI pipeline via
+//           dispatchReplyWithBufferedBlockDispatcher.
+// Outbound: The AI reply is delivered to your configured webhookUrl
+//           via the dispatcher's deliver callback.
 //
 // Install:
 //   openclaw plugins install openclaw-rest-channel
@@ -24,6 +27,9 @@
 //   }
 // ---------------------------------------------------------------------------
 
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk";
+
 import type {
   RestChannelConfig,
   ResolvedRestAccount,
@@ -32,6 +38,7 @@ import type {
 } from "./types.js";
 import { createInboundHandler } from "./inbound.js";
 import { deliverOutbound } from "./outbound.js";
+import { setRestRuntime, getRestRuntime } from "./runtime.js";
 
 // Re-export types for consumers
 export type {
@@ -47,6 +54,9 @@ export type {
 // ---------------------------------------------------------------------------
 // Config helpers
 // ---------------------------------------------------------------------------
+
+const CHANNEL_ID = "rest";
+const DEFAULT_PATH = "/rest/inbound";
 
 function getChannelConfig(cfg: Record<string, unknown>): RestChannelConfig | undefined {
   const channels = cfg?.channels as Record<string, unknown> | undefined;
@@ -71,14 +81,39 @@ function resolveAccount(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: keep alive until abort signal fires
+// ---------------------------------------------------------------------------
+
+function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<void> {
+  return new Promise((resolve) => {
+    const complete = () => {
+      onAbort?.();
+      resolve();
+    };
+    if (!signal) return;
+    if (signal.aborted) {
+      complete();
+      return;
+    }
+    signal.addEventListener("abort", complete, { once: true });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Track registered route unregister callbacks to avoid duplicates
+// ---------------------------------------------------------------------------
+
+const activeRouteUnregisters = new Map<string, () => void>();
+
+// ---------------------------------------------------------------------------
 // Channel plugin definition
 // ---------------------------------------------------------------------------
 
 const restChannelPlugin = {
-  id: "rest",
+  id: CHANNEL_ID,
 
   meta: {
-    id: "rest",
+    id: CHANNEL_ID,
     label: "REST",
     selectionLabel: "REST (HTTP API)",
     docsPath: "/channels/rest",
@@ -89,6 +124,8 @@ const restChannelPlugin = {
   capabilities: {
     chatTypes: ["direct", "group"] as string[],
   },
+
+  reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
 
   config: {
     listAccountIds: (cfg: Record<string, unknown>) => listAccountIds(cfg),
@@ -134,134 +171,195 @@ const restChannelPlugin = {
       });
     },
   },
+
+  // -------------------------------------------------------------------------
+  // Gateway adapter – wires inbound HTTP messages into the AI pipeline
+  // -------------------------------------------------------------------------
+  gateway: {
+    startAccount: async (ctx: {
+      cfg: Record<string, unknown>;
+      accountId: string;
+      account: ResolvedRestAccount;
+      runtime: unknown;
+      abortSignal: AbortSignal;
+      log?: { info?: (...a: unknown[]) => void; warn?: (...a: unknown[]) => void };
+    }) => {
+      const { cfg, accountId, log } = ctx;
+      const account = resolveAccount(cfg, accountId);
+
+      if (!account) {
+        log?.info?.(`[rest-channel] Account "${accountId}" not found or disabled, skipping`);
+        return waitUntilAbort(ctx.abortSignal);
+      }
+
+      if (!account.webhookUrl) {
+        log?.warn?.(
+          `[rest-channel] Account "${accountId}" has no webhookUrl configured – replies will be dropped`,
+        );
+      }
+
+      log?.info?.(
+        `[rest-channel] Starting REST channel (account: ${accountId}, path: ${account.inboundPath ?? DEFAULT_PATH})`,
+      );
+
+      // Create the inbound HTTP handler
+      const inboundHandler = createInboundHandler({
+        resolveAccount: (reqAccountId: string) => resolveAccount(cfg, reqAccountId),
+        onMessage: async (resolvedAccount, message) => {
+          const rt = getRestRuntime();
+          const currentCfg = await rt.config.loadConfig();
+
+          // Build media fields from inbound attachments (if any).
+          // The MsgContext expects MediaUrl/MediaUrls for the AI's
+          // media-understanding pipeline (vision, transcription, etc.).
+          const mediaFields: Record<string, unknown> = {};
+          if (message.attachments && message.attachments.length > 0) {
+            const urls = message.attachments.map((a) => a.url);
+            const types = message.attachments
+              .map((a) => a.mimeType)
+              .filter((t): t is string => !!t);
+
+            // Singular fields hold the first attachment
+            mediaFields.MediaUrl = urls[0];
+            if (types[0]) mediaFields.MediaType = types[0];
+
+            // Plural fields hold all attachments
+            if (urls.length > 0) mediaFields.MediaUrls = urls;
+            if (types.length > 0) mediaFields.MediaTypes = types;
+          }
+
+          // Build MsgContext using SDK's finalizeInboundContext
+          const msgCtx = rt.channel.reply.finalizeInboundContext({
+            Body: message.text ?? "",
+            RawBody: message.text ?? "",
+            CommandBody: message.text ?? "",
+            From: `rest:${message.senderId}`,
+            To: `rest:${message.senderId}`,
+            SessionKey: `rest:${resolvedAccount.accountId}:${message.conversationId ?? message.senderId}`,
+            AccountId: resolvedAccount.accountId,
+            OriginatingChannel: CHANNEL_ID,
+            OriginatingTo: `rest:${message.senderId}`,
+            ChatType: message.isGroup ? "group" : "direct",
+            SenderName: message.senderName ?? message.senderId,
+            SenderId: message.senderId,
+            Provider: CHANNEL_ID,
+            Surface: CHANNEL_ID,
+            ConversationLabel: message.senderName ?? message.senderId,
+            Timestamp: Date.now(),
+            CommandAuthorized: true,
+            ...mediaFields,
+          });
+
+          // Dispatch through OpenClaw's AI pipeline and deliver via webhook
+          await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: msgCtx,
+            cfg: currentCfg,
+            dispatcherOptions: {
+              deliver: async (payload: { text?: string; body?: string }) => {
+                const text = payload?.text ?? payload?.body;
+                if (text) {
+                  await deliverOutbound({
+                    account: resolvedAccount,
+                    conversationId: message.conversationId ?? message.senderId,
+                    recipientId: message.senderId,
+                    text,
+                    logger: {
+                      info: (...a: unknown[]) => log?.info?.(...a),
+                      warn: (...a: unknown[]) => log?.warn?.(...a),
+                    },
+                  });
+                }
+              },
+              onReplyStart: () => {
+                log?.info?.(`[rest-channel] Agent reply started for "${message.senderId}"`);
+              },
+            },
+          });
+        },
+        logger: {
+          info: (...a: unknown[]) => log?.info?.(...a),
+          warn: (...a: unknown[]) => log?.warn?.(...a),
+        },
+      });
+
+      // Register the HTTP route for inbound messages
+      const routePath = account.inboundPath ?? DEFAULT_PATH;
+      const routeKey = `${accountId}:${routePath}`;
+
+      // Deregister stale route from previous start (e.g. on auto-restart)
+      const prevUnregister = activeRouteUnregisters.get(routeKey);
+      if (prevUnregister) {
+        log?.info?.(`[rest-channel] Deregistering stale route before re-registering: ${routePath}`);
+        prevUnregister();
+        activeRouteUnregisters.delete(routeKey);
+      }
+
+      const unregister = registerPluginHttpRoute({
+        path: routePath,
+        auth: "plugin",
+        replaceExisting: true,
+        pluginId: CHANNEL_ID,
+        accountId: account.accountId,
+        log: (msg: string) => log?.info?.(msg),
+        handler: inboundHandler as unknown as (
+          req: import("node:http").IncomingMessage,
+          res: import("node:http").ServerResponse,
+        ) => Promise<boolean>,
+      });
+      activeRouteUnregisters.set(routeKey, unregister);
+
+      log?.info?.(`[rest-channel] Registered inbound route: ${routePath}`);
+
+      // Keep alive until abort signal fires
+      return waitUntilAbort(ctx.abortSignal, () => {
+        log?.info?.(`[rest-channel] Stopping REST channel (account: ${accountId})`);
+        if (typeof unregister === "function") unregister();
+        activeRouteUnregisters.delete(routeKey);
+      });
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------
-// Plugin registration
+// Plugin registration (object shape with id + register)
 // ---------------------------------------------------------------------------
 
-/**
- * OpenClaw plugin entry point.
- *
- * This function is called by the OpenClaw Gateway when the plugin is loaded.
- * It registers:
- *   1. The REST messaging channel (inbound + outbound)
- *   2. An HTTP route on the Gateway for receiving inbound messages
- *   3. A gateway RPC method for health/status checks
- */
-export default function register(api: {
-  registerChannel: (opts: { plugin: typeof restChannelPlugin }) => void;
-  registerHttpRoute: (opts: {
-    path: string;
-    auth: string;
-    match?: string;
-    handler: (req: unknown, res: unknown) => Promise<boolean>;
-  }) => void;
-  registerGatewayMethod: (
-    name: string,
-    handler: (ctx: { respond: (ok: boolean, data: unknown) => void }) => void,
-  ) => void;
-  config: Record<string, unknown>;
-  logger: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void };
-  runtime?: {
-    inbound?: {
-      handleMessage?: (opts: {
-        channel: string;
-        accountId: string;
-        senderId: string;
-        senderName?: string;
-        text?: string;
-        conversationId: string;
-        isGroup?: boolean;
-        metadata?: Record<string, unknown>;
-      }) => void;
-    };
-  };
-}) {
-  const logger = api.logger;
+const plugin = {
+  id: "openclaw-rest-channel",
+  name: "REST Channel",
+  description:
+    "A minimal REST-based channel plugin for OpenClaw. Connect any external web application via simple HTTP requests.",
 
-  // -----------------------------------------------------------------------
-  // 1. Register the channel
-  // -----------------------------------------------------------------------
-  api.registerChannel({ plugin: restChannelPlugin });
+  register(api: OpenClawPluginApi) {
+    // Store the runtime reference for later use by the channel adapter
+    setRestRuntime(api.runtime);
 
-  // -----------------------------------------------------------------------
-  // 2. Register inbound HTTP routes
-  // -----------------------------------------------------------------------
+    // Register the REST channel
+    api.registerChannel({ plugin: restChannelPlugin as any });
 
-  // Collect all unique inbound paths across accounts
-  const accountIds = listAccountIds(api.config);
-  const pathsRegistered = new Set<string>();
+    // Register a status RPC method
+    api.registerGatewayMethod("rest-channel.status", ({ respond }) => {
+      const accounts = listAccountIds(api.config).map((id) => {
+        const acct = resolveAccount(api.config, id);
+        return {
+          accountId: id,
+          enabled: !!acct,
+          hasWebhookUrl: !!acct?.webhookUrl,
+          hasApiKey: !!acct?.apiKey,
+          inboundPath: acct?.inboundPath ?? DEFAULT_PATH,
+        };
+      });
 
-  // Always register the default path
-  const defaultPath = "/rest/inbound";
-  pathsRegistered.add(defaultPath);
-
-  for (const id of accountIds) {
-    const account = resolveAccount(api.config, id);
-    if (account?.inboundPath && account.inboundPath !== defaultPath) {
-      pathsRegistered.add(account.inboundPath);
-    }
-  }
-
-  const inboundHandler = createInboundHandler({
-    resolveAccount: (accountId: string) => resolveAccount(api.config, accountId),
-    onMessage: (account, message) => {
-      // Route the inbound message into the OpenClaw messaging pipeline
-      if (api.runtime?.inbound?.handleMessage) {
-        api.runtime.inbound.handleMessage({
-          channel: "rest",
-          accountId: account.accountId,
-          senderId: message.senderId,
-          senderName: message.senderName,
-          text: message.text,
-          conversationId: message.conversationId ?? message.senderId,
-          isGroup: message.isGroup,
-          metadata: message.metadata,
-        });
-      } else {
-        logger.info(
-          `[rest-channel] Inbound message received (runtime.inbound not available):`,
-          JSON.stringify(message),
-        );
-      }
-    },
-    logger,
-  });
-
-  for (const path of pathsRegistered) {
-    api.registerHttpRoute({
-      path,
-      auth: "plugin", // Plugin manages its own auth via apiKey
-      handler: inboundHandler as unknown as (req: unknown, res: unknown) => Promise<boolean>,
+      respond(true, {
+        channel: CHANNEL_ID,
+        accounts,
+      });
     });
 
-    logger.info(`[rest-channel] Registered inbound route: ${path}`);
-  }
+    api.logger.info(
+      `[rest-channel] Plugin loaded – ${listAccountIds(api.config).length} account(s) configured`,
+    );
+  },
+};
 
-  // -----------------------------------------------------------------------
-  // 3. Register a status RPC method
-  // -----------------------------------------------------------------------
-  api.registerGatewayMethod("rest-channel.status", ({ respond }) => {
-    const accounts = listAccountIds(api.config).map((id) => {
-      const acct = resolveAccount(api.config, id);
-      return {
-        accountId: id,
-        enabled: !!acct,
-        hasWebhookUrl: !!acct?.webhookUrl,
-        hasApiKey: !!acct?.apiKey,
-        inboundPath: acct?.inboundPath ?? defaultPath,
-      };
-    });
-
-    respond(true, {
-      channel: "rest",
-      accounts,
-      registeredPaths: [...pathsRegistered],
-    });
-  });
-
-  logger.info(
-    `[rest-channel] Plugin loaded – ${accountIds.length} account(s) configured`,
-  );
-}
+export default plugin;

@@ -69,7 +69,7 @@ function extractBearerToken(req: GatewayRequest): string | undefined {
 
 export interface InboundHandlerDeps {
   resolveAccount: (accountId: string) => ResolvedRestAccount | undefined;
-  onMessage: (account: ResolvedRestAccount, message: InboundMessagePayload) => void;
+  onMessage: (account: ResolvedRestAccount, message: InboundMessagePayload) => void | Promise<void>;
   logger: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void };
 }
 
@@ -139,7 +139,7 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 
     // Hand off to the channel pipeline
     try {
-      deps.onMessage(account, payload);
+      await deps.onMessage(account, payload);
     } catch (err) {
       deps.logger.warn("[rest-channel] Error processing inbound message:", err);
       jsonError(res, 500, "Internal processing error");
