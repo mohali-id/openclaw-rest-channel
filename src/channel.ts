@@ -333,31 +333,63 @@ const restChannelPlugin = {
             for (const attachment of message.attachments) {
               if (!attachment.url) continue;
               try {
-                let ssrfPolicy: { allowPrivateNetwork?: boolean; allowedHostnames?: string[] } | undefined;
-                if (allowPrivate) {
-                  ssrfPolicy = { allowPrivateNetwork: true };
-                } else {
-                  try {
-                    const hostname = new URL(attachment.url).hostname;
-                    if (hostname) {
-                      ssrfPolicy = { allowedHostnames: [hostname] };
-                    }
-                  } catch {
-                    // invalid URL – let fetchRemoteMedia handle it
-                  }
-                }
+                // Check if this is a data URL (e.g., data:image/png;base64,...)
+                let buffer: Buffer;
+                let contentType: string | undefined;
 
-                // Download the remote media
-                const downloaded = await rt.channel.media.fetchRemoteMedia({
-                  url: attachment.url,
-                  maxBytes,
-                  ssrfPolicy,
-                });
+                if (attachment.url.startsWith("data:")) {
+                  // Parse data URL
+                  const dataUrlMatch = attachment.url.match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+                  if (!dataUrlMatch) {
+                    throw new Error("Invalid data URL format");
+                  }
+
+                  contentType = dataUrlMatch[1] || attachment.mimeType || "application/octet-stream";
+                  const isBase64 = dataUrlMatch[2] === ";base64";
+                  const data = dataUrlMatch[3];
+
+                  if (isBase64) {
+                    buffer = Buffer.from(data, "base64");
+                  } else {
+                    // URL-encoded data
+                    buffer = Buffer.from(decodeURIComponent(data));
+                  }
+
+                  // Validate size limit for data URLs too
+                  if (buffer.byteLength > maxBytes) {
+                    throw new Error(`Data URL exceeds size limit: ${buffer.byteLength} > ${maxBytes}`);
+                  }
+                } else {
+                  // Regular URL – build SSRF policy and fetch remotely
+                  let ssrfPolicy: { allowPrivateNetwork?: boolean; allowedHostnames?: string[] } | undefined;
+                  if (allowPrivate) {
+                    ssrfPolicy = { allowPrivateNetwork: true };
+                  } else {
+                    try {
+                      const hostname = new URL(attachment.url).hostname;
+                      if (hostname) {
+                        ssrfPolicy = { allowedHostnames: [hostname] };
+                      }
+                    } catch {
+                      // invalid URL – let fetchRemoteMedia handle it
+                    }
+                  }
+
+                  // Download the remote media
+                  const downloaded = await rt.channel.media.fetchRemoteMedia({
+                    url: attachment.url,
+                    maxBytes,
+                    ssrfPolicy,
+                  });
+
+                  buffer = Buffer.from(downloaded.buffer);
+                  contentType = downloaded.contentType ?? attachment.mimeType;
+                }
 
                 // Save to OpenClaw's managed media directory
                 const saved = await rt.channel.media.saveMediaBuffer(
-                  Buffer.from(downloaded.buffer),
-                  downloaded.contentType ?? attachment.mimeType,
+                  buffer,
+                  contentType,
                   "inbound",
                   maxBytes,
                   attachment.filename,

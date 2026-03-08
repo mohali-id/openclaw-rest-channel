@@ -2,6 +2,12 @@
 // Shared types for the webchat example
 // ---------------------------------------------------------------------------
 
+export interface UserInfo {
+  name: string;
+  gender: string;
+  age: number;
+}
+
 export interface Attachment {
   id: string;
   url: string;

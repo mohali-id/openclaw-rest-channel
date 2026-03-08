@@ -33,7 +33,7 @@ export default function FilePreview({ attachment, onRemove }: FilePreviewProps) 
         <div className="file-preview-icon">&#128196;</div>
       )}
 
-      <div>
+      <div style={{ display: 'grid'}}>
         <div className="file-preview-name">{attachment.filename}</div>
         {attachment.size != null && (
           <div className="file-preview-size">{formatSize(attachment.size)}</div>

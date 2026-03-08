@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { addMessage } from "@/lib/store";
 import type { ChatMessage } from "@/lib/types";
 
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL ?? "http://localhost:18789";
+const INBOUND_URL = process.env.OPENCLAW_INBOUND_URL ?? "http://localhost:18789/rest/inbound";
 const API_KEY = process.env.OPENCLAW_API_KEY ?? "";
 
 export async function POST(req: NextRequest) {
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
       headers["Authorization"] = `Bearer ${API_KEY}`;
     }
 
-    const gatewayRes = await fetch(`${GATEWAY_URL}/rest/inbound`, {
+    const gatewayRes = await fetch(INBOUND_URL, {
       method: "POST",
       headers,
       body: JSON.stringify(inboundPayload),

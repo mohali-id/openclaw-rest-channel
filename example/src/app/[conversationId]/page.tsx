@@ -142,33 +142,21 @@ export default function ChatPage() {
   // ------ Upload a file ----------------------------------------------------
 
   const handleUpload = useCallback(async (file: File): Promise<Attachment> => {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const res = await fetch("/api/chat/upload", {
-      method: "POST",
-      body: formData,
+    // Convert file to data URL
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
     });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error ?? "Upload failed");
-    }
-
-    const data = await res.json();
-
-    let previewUrl: string | undefined;
-    if (file.type.startsWith("image/")) {
-      previewUrl = URL.createObjectURL(file);
-    }
 
     return {
       id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      url: data.url,
-      mimeType: data.mimeType,
-      filename: data.filename,
-      previewUrl,
-      size: data.size,
+      url: dataUrl,
+      mimeType: file.type,
+      filename: file.name,
+      previewUrl: file.type.startsWith("image/") ? dataUrl : undefined,
+      size: file.size,
     };
   }, []);
 

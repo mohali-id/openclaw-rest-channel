@@ -4,7 +4,7 @@
 // In production, replace with a proper database (Redis, Postgres, etc.)
 // This stores messages per conversationId so the client can poll for updates.
 
-import type { ChatMessage } from "./types";
+import type { ChatMessage, UserInfo } from "./types";
 
 const conversations = new Map<string, ChatMessage[]>();
 
@@ -29,4 +29,16 @@ export function getMessagesSince(
 ): ChatMessage[] {
   const msgs = conversations.get(conversationId) ?? [];
   return msgs.filter((m) => m.timestamp > afterTimestamp);
+}
+
+// ------ User info storage ------------------------------------------------
+
+const userInfoStore = new Map<string, UserInfo>();
+
+export function saveUserInfo(conversationId: string, userInfo: UserInfo): void {
+  userInfoStore.set(conversationId, userInfo);
+}
+
+export function getUserInfo(conversationId: string): UserInfo | null {
+  return userInfoStore.get(conversationId) ?? null;
 }
