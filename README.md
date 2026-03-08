@@ -39,6 +39,12 @@ Add the channel config to your `~/.openclaw/openclaw.json`:
 
 ```jsonc
 {
+  "plugins": {
+    "enabled": true,
+    "allow": [
+      "openclaw-rest-channel"
+    ]
+  },
   "channels": {
     "rest": {
       "accounts": {
@@ -53,7 +59,10 @@ Add the channel config to your `~/.openclaw/openclaw.json`:
           "apiKey": "your-inbound-api-key",
 
           // Custom inbound path (optional, defaults to /rest/inbound)
-          "inboundPath": "/rest/inbound"
+          "inboundPath": "/rest/inbound",
+
+          // Maximum Size of Media Attachment
+          "mediaMaxMb": 8
         }
       }
     }
