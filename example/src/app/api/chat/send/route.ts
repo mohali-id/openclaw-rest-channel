@@ -12,7 +12,7 @@ const API_KEY = process.env.OPENCLAW_API_KEY ?? "";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, text, attachments, conversationId, senderId, senderName } = body;
+    const { id, text, attachments, conversationId, senderId, senderName, userInfo } = body;
 
     if (!conversationId) {
       return NextResponse.json(
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     // Forward to OpenClaw Gateway inbound endpoint
     const inboundPayload = {
       senderId: senderId ?? "webchat-user",
-      senderName: senderName ?? "Webchat User",
+      senderName: senderName ?? (userInfo?.name || "Webchat User"),
       text: text ?? undefined,
       conversationId,
       attachments: attachments?.map(
@@ -55,11 +55,11 @@ export async function POST(req: NextRequest) {
       ),
       metadata: {
         source: "nextjs-webchat-example",
-        name: "Moh Ali",
-        nickname: "ali",
-        location: "DKI Jakarta, Indonesia",
-        gender: "male",
-        age: 30,
+        ...(userInfo && {
+          name: userInfo.name,
+          gender: userInfo.gender,
+          age: userInfo.age,
+        }),
       },
     };
 

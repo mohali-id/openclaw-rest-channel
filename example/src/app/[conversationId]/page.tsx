@@ -12,7 +12,8 @@ import { useParams, useRouter } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 import ChatWindow from "@/components/chat-window";
 import InputBar from "@/components/input-bar";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import UserInfoForm from "@/components/user-info-form";
+import type { Attachment, ChatMessage, UserInfo } from "@/lib/types";
 
 const POLL_INTERVAL = 1500; // ms
 
@@ -23,7 +24,19 @@ export default function ChatPage() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isWaiting, setIsWaiting] = useState(false);
+  const [showUserForm, setShowUserForm] = useState(false);
   const lastPollTimestamp = useRef<string>("");
+
+  // ------ Check for user info on mount ------------------------------------
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    
+    const stored = localStorage.getItem("userInfo");
+    if (!stored) {
+      setShowUserForm(true);
+    }
+  }, []);
 
   // ------ Polling for new messages ----------------------------------------
 
@@ -97,6 +110,10 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, userMessage]);
       setIsWaiting(true);
 
+      // Get user info from localStorage
+      const storedUserInfo = localStorage.getItem("userInfo");
+      const userInfo = storedUserInfo ? JSON.parse(storedUserInfo) : undefined;
+
       try {
         const res = await fetch("/api/chat/send", {
           method: "POST",
@@ -110,6 +127,7 @@ export default function ChatPage() {
               filename: a.filename,
             })),
             conversationId,
+            userInfo,
           }),
         });
 
@@ -166,7 +184,26 @@ export default function ChatPage() {
     router.push(`/${uuidv4()}`);
   }, [router]);
 
+  // ------ Handle user info submission --------------------------------------
+
+  const handleUserInfoSubmit = useCallback((userInfo: UserInfo) => {
+    localStorage.setItem("userInfo", JSON.stringify(userInfo));
+    setShowUserForm(false);
+  }, []);
+
+  // ------ Reset user info --------------------------------------------------
+
+  const handleResetUserInfo = useCallback(() => {
+    localStorage.removeItem("userInfo");
+    setShowUserForm(true);
+  }, []);
+
   // ------ Render -----------------------------------------------------------
+
+  // Show form if user info is missing
+  if (showUserForm) {
+    return <UserInfoForm onSubmit={handleUserInfoSubmit} />;
+  }
 
   return (
     <div className="app-container">
@@ -179,10 +216,28 @@ export default function ChatPage() {
         </div>
         <button
           type="button"
+          onClick={handleResetUserInfo}
+          title="Reset profile information"
+          style={{
+            marginLeft: "auto",
+            background: "rgba(255,255,255,0.15)",
+            border: "none",
+            color: "#fff",
+            padding: "6px 14px",
+            borderRadius: "9999px",
+            cursor: "pointer",
+            fontSize: "13px",
+            fontWeight: 500,
+          }}
+        >
+          Reset Profile
+        </button>
+        <button
+          type="button"
           onClick={handleNewChat}
           title="Start new conversation"
           style={{
-            marginLeft: "auto",
+            marginLeft: "8px",
             background: "rgba(255,255,255,0.2)",
             border: "none",
             color: "#fff",

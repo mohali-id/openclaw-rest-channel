@@ -33,6 +33,7 @@ export interface SendMessagePayload {
   text?: string;
   attachments?: { url: string; mimeType: string; filename: string }[];
   conversationId: string;
+  userInfo?: UserInfo;
 }
 
 /** Outbound webhook payload from OpenClaw */
