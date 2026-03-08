@@ -1,0 +1,26 @@
+{
+  "name": "openclaw-rest-webchat-example",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Example Next.js webchat integration with openclaw-rest-channel",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^15.3.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.8.0"
+  }
+}

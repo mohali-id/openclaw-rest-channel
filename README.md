@@ -264,6 +264,19 @@ Returns:
 
 ## Examples
 
+### Next.js Webchat (full example)
+
+A complete, polished webchat application built with Next.js 15 and React 19. Includes file attachments, markdown rendering, typing indicators, and webhook signature verification.
+
+```bash
+cd example/nextjs-webchat
+npm install
+cp .env.example .env.local  # then edit with your settings
+npm run dev
+```
+
+See [`example/nextjs-webchat/README.md`](example/nextjs-webchat/README.md) for full setup instructions.
+
 ### Minimal webchat integration
 
 ```javascript
