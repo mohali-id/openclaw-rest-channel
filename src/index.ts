@@ -309,9 +309,28 @@ const restChannelPlugin = {
             },
           });
 
+          // Build untrusted context from inbound metadata so the agent
+          // can see user information (name, age, timezone, etc.).
+          // Uses the SDK's UntrustedContext field — the same mechanism
+          // Discord/Slack use for channel topics. The pipeline appends
+          // it to the prompt with a security header telling the LLM
+          // to treat it as metadata, not instructions.
+          const untrustedContext: string[] = [];
+          if (message.metadata && typeof message.metadata === "object") {
+            const entries = Object.entries(message.metadata)
+              .filter(([, v]) => v != null && v !== "")
+              .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+            if (entries.length > 0) {
+              untrustedContext.push(
+                `REST channel user metadata:\n${entries.join("\n")}`,
+              );
+            }
+          }
+
           // Build MsgContext using SDK's finalizeInboundContext
           const msgCtx = rt.channel.reply.finalizeInboundContext({
             Body: message.text ?? "",
+            BodyForAgent: message.text ?? "",
             RawBody: message.text ?? "",
             CommandBody: message.text ?? "",
             From: `rest:${message.senderId}`,
@@ -328,6 +347,7 @@ const restChannelPlugin = {
             ConversationLabel: message.senderName ?? message.senderId,
             Timestamp: Date.now(),
             CommandAuthorized: true,
+            UntrustedContext: untrustedContext.length > 0 ? untrustedContext : undefined,
             ...mediaFields,
           });
 

@@ -108,6 +108,7 @@ export default function ChatPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            id: userMessage.id,
             text: text || undefined,
             attachments: attachments.map((a) => ({
               url: a.url,

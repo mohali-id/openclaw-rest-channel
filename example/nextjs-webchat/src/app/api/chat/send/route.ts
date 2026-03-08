@@ -12,7 +12,7 @@ const API_KEY = process.env.OPENCLAW_API_KEY ?? "";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { text, attachments, conversationId, senderId, senderName } = body;
+    const { id, text, attachments, conversationId, senderId, senderName } = body;
 
     if (!conversationId) {
       return NextResponse.json(
@@ -28,9 +28,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Store user message locally
+    // Store user message locally (use client-provided ID so polling
+    // dedup matches the optimistic message already shown in the UI)
     const userMessage: ChatMessage = {
-      id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: id ?? `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role: "user",
       text: text ?? "",
       attachments: attachments ?? [],
@@ -54,6 +55,11 @@ export async function POST(req: NextRequest) {
       ),
       metadata: {
         source: "nextjs-webchat-example",
+        name: "Moh Ali",
+        nickname: "ali",
+        location: "DKI Jakarta, Indonesia",
+        gender: "male",
+        age: 30,
       },
     };
 
