@@ -24,6 +24,16 @@
         "type": "string",
         "default": "/rest/inbound",
         "description": "HTTP path on the Gateway where inbound messages are received."
+      },
+      "allowPrivateNetwork": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow fetching media attachments from private/internal network addresses (localhost, 192.168.x.x, etc.). Enable this when your app serves attachments from a local URL."
+      },
+      "mediaMaxMb": {
+        "type": "number",
+        "default": 8,
+        "description": "Maximum size in MB for a single media attachment download. Attachments exceeding this limit are skipped."
       }
     }
   },
@@ -43,6 +53,14 @@
     "inboundPath": {
       "label": "Inbound Path",
       "placeholder": "/rest/inbound"
+    },
+    "allowPrivateNetwork": {
+      "label": "Allow Private Network",
+      "description": "Enable if your app serves attachment files from localhost or a private IP"
+    },
+    "mediaMaxMb": {
+      "label": "Media Max Size (MB)",
+      "placeholder": "8"
     }
   }
 }

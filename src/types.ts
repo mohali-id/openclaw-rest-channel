@@ -36,6 +36,21 @@ export interface RestAccountConfig {
    * Set a unique path per account if you run multiple REST integrations.
    */
   inboundPath?: string;
+
+  /**
+   * Allow fetching media attachments from private/internal network
+   * addresses (e.g. localhost, 192.168.x.x, 10.x.x.x).
+   *
+   * Enable this when your application serves attachment files from a
+   * local or private-network URL. Defaults to false.
+   */
+  allowPrivateNetwork?: boolean;
+
+  /**
+   * Maximum size (in MB) for a single media attachment download.
+   * Attachments exceeding this limit are skipped. Defaults to 8 MB.
+   */
+  mediaMaxMb?: number;
 }
 
 /**

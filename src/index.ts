@@ -210,23 +210,91 @@ const restChannelPlugin = {
           const currentCfg = await rt.config.loadConfig();
 
           // Build media fields from inbound attachments (if any).
-          // The MsgContext expects MediaUrl/MediaUrls for the AI's
-          // media-understanding pipeline (vision, transcription, etc.).
-          const mediaFields: Record<string, unknown> = {};
+          //
+          // The AI media-understanding pipeline (vision, transcription,
+          // etc.) requires media files to be available as local paths.
+          // We download each remote URL → save to OpenClaw's media dir
+          // → pass the local paths as MediaPath / MediaPaths.
+          //
+          // This matches the pattern used by stock plugins (bluebubbles,
+          // synology-chat, etc.) which always save to local files first.
+          const mediaPaths: string[] = [];
+          const mediaUrls: string[] = [];
+          const mediaTypes: string[] = [];
+
           if (message.attachments && message.attachments.length > 0) {
-            const urls = message.attachments.map((a) => a.url);
-            const types = message.attachments
-              .map((a) => a.mimeType)
-              .filter((t): t is string => !!t);
+            const maxBytes =
+              resolvedAccount.mediaMaxMb && resolvedAccount.mediaMaxMb > 0
+                ? resolvedAccount.mediaMaxMb * 1024 * 1024
+                : 8 * 1024 * 1024; // default 8 MB
 
-            // Singular fields hold the first attachment
-            mediaFields.MediaUrl = urls[0];
-            if (types[0]) mediaFields.MediaType = types[0];
+            // Build SSRF policy: if allowPrivateNetwork is on, allow all
+            // private addresses. Otherwise, auto-allowlist each attachment's
+            // hostname so that e.g. localhost URLs work when the user's app
+            // serves files locally (matches bluebubbles pattern).
+            const allowPrivate = resolvedAccount.allowPrivateNetwork === true;
 
-            // Plural fields hold all attachments
-            if (urls.length > 0) mediaFields.MediaUrls = urls;
-            if (types.length > 0) mediaFields.MediaTypes = types;
+            for (const attachment of message.attachments) {
+              if (!attachment.url) continue;
+              try {
+                let ssrfPolicy: { allowPrivateNetwork?: boolean; allowedHostnames?: string[] } | undefined;
+                if (allowPrivate) {
+                  ssrfPolicy = { allowPrivateNetwork: true };
+                } else {
+                  try {
+                    const hostname = new URL(attachment.url).hostname;
+                    if (hostname) {
+                      ssrfPolicy = { allowedHostnames: [hostname] };
+                    }
+                  } catch {
+                    // invalid URL – let fetchRemoteMedia handle it
+                  }
+                }
+
+                // Download the remote media
+                const downloaded = await rt.channel.media.fetchRemoteMedia({
+                  url: attachment.url,
+                  maxBytes,
+                  ssrfPolicy,
+                });
+
+                // Save to OpenClaw's managed media directory
+                const saved = await rt.channel.media.saveMediaBuffer(
+                  Buffer.from(downloaded.buffer),
+                  downloaded.contentType ?? attachment.mimeType,
+                  "inbound",
+                  maxBytes,
+                  attachment.filename,
+                );
+
+                mediaPaths.push(saved.path);
+                mediaUrls.push(saved.path); // stock plugins set URL to local path too
+                if (saved.contentType) {
+                  mediaTypes.push(saved.contentType);
+                }
+              } catch (err) {
+                log?.warn?.(
+                  `[rest-channel] Attachment download failed url=${attachment.url} err=${String(err)}`,
+                );
+              }
+            }
           }
+
+          const mediaFields: Record<string, unknown> = {};
+          if (mediaPaths.length > 0) {
+            mediaFields.MediaPath = mediaPaths[0];
+            mediaFields.MediaPaths = mediaPaths;
+            mediaFields.MediaUrl = mediaUrls[0];
+            mediaFields.MediaUrls = mediaUrls;
+            if (mediaTypes.length > 0) {
+              mediaFields.MediaType = mediaTypes[0];
+              mediaFields.MediaTypes = mediaTypes;
+            }
+          }
+
+          log?.info?.(
+            `[rest-channel] Received message from "${message.senderId}" with ${Object.keys(mediaFields).length} attachment(s)`,
+          );
 
           // Build MsgContext using SDK's finalizeInboundContext
           const msgCtx = rt.channel.reply.finalizeInboundContext({
