@@ -1,6 +1,6 @@
 {
   "name": "openclaw-rest-channel",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "description": "A minimal REST-based channel plugin for OpenClaw. Integrate any external web application with OpenClaw using simple HTTP requests.",
   "main": "index.ts",
   "types": "index.d.ts",

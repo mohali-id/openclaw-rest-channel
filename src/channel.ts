@@ -38,6 +38,7 @@ import type {
 } from "./types.js";
 import { createInboundHandler } from "./inbound.js";
 import { deliverOutbound } from "./outbound.js";
+import { generateMessageId } from "./crypto.js";
 import { setRestRuntime, getRestRuntime } from "./runtime.js";
 
 // Re-export types for consumers
@@ -75,27 +76,9 @@ function resolveAccount(
   const rest = getChannelConfig(cfg);
   const id = accountId ?? "default";
   const raw = rest?.accounts?.[id];
-  if (raw) {
-    if (raw.enabled === false) return undefined;
-    return { ...raw, accountId: id };
-  }
-
-  // The requested ID does not match any configured account name.
-  // This happens when OpenClaw's CLI passes a *target* (recipient /
-  // conversation UUID) as accountId – e.g.:
-  //   openclaw message send --channel rest --target <uuid>
-  //
-  // Fall back to the "default" account, or the first enabled account
-  // if "default" doesn't exist, so the message can still be delivered.
-  const fallbackId = rest?.accounts?.["default"]
-    ? "default"
-    : Object.keys(rest?.accounts ?? {}).find(
-        (k) => rest!.accounts![k].enabled !== false,
-      );
-  if (!fallbackId) return undefined;
-  const fallback = rest!.accounts![fallbackId];
-  if (fallback.enabled === false) return undefined;
-  return { ...fallback, accountId: fallbackId };
+  if (!raw) return undefined;
+  if (raw.enabled === false) return undefined;
+  return { ...raw, accountId: id };
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +127,33 @@ const restChannelPlugin = {
     media: true,
   },
 
+  // -------------------------------------------------------------------------
+  // Messaging adapter – tells OpenClaw how to recognize & normalize targets
+  // -------------------------------------------------------------------------
+  // Without this, `openclaw message send --channel rest --target <id>` fails
+  // with "Unknown target" because the core has no way to validate the target.
+  //
+  // REST targets are free-form identifiers (UUIDs, user IDs, etc.) defined
+  // by the external application – any non-empty string is valid.
+  messaging: {
+    normalizeTarget: (raw: string): string | undefined => {
+      const trimmed = raw.trim();
+      if (!trimmed) return undefined;
+      // Strip optional "rest:" prefix for convenience
+      return trimmed.replace(/^rest:/i, "").trim() || undefined;
+    },
+
+    targetResolver: {
+      looksLikeId: (_raw: string, normalized?: string): boolean => {
+        // REST targets are opaque identifiers managed by the external app.
+        // Any non-empty normalized value is treated as a valid direct ID
+        // so the core skips directory lookup (REST has no directory).
+        return !!normalized?.trim();
+      },
+      hint: "<senderId|conversationId|any-external-id>",
+    },
+  },
+
   reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
 
   config: {
@@ -153,16 +163,16 @@ const restChannelPlugin = {
       resolveAccount(cfg, accountId),
 
     inspectAccount: (cfg: Record<string, unknown>, accountId?: string | null) => {
-      const resolved = resolveAccount(cfg, accountId);
-      if (!resolved) {
-        return { accountId: accountId ?? "default", configured: false, enabled: false };
-      }
+      const rest = getChannelConfig(cfg);
+      const id = accountId ?? "default";
+      const raw = rest?.accounts?.[id];
+      if (!raw) return { accountId: id, configured: false, enabled: false };
       return {
-        accountId: resolved.accountId,
+        accountId: id,
         configured: true,
-        enabled: true,
-        webhookUrl: resolved.webhookUrl ? "configured" : "not set",
-        apiKeyStatus: resolved.apiKey ? "available" : "not set",
+        enabled: raw.enabled !== false,
+        webhookUrl: raw.webhookUrl ? "configured" : "not set",
+        apiKeyStatus: raw.apiKey ? "available" : "not set",
       };
     },
   },
@@ -170,25 +180,92 @@ const restChannelPlugin = {
   outbound: {
     deliveryMode: "direct" as const,
 
-    sendText: async (params: {
+    resolveTarget: (params: {
+      cfg?: Record<string, unknown>;
+      to?: string;
+      allowFrom?: string[];
+      accountId?: string | null;
+      mode?: string;
+    }): { ok: true; to: string } | { ok: false; error: Error } => {
+      const to = params.to?.trim();
+      if (!to) {
+        return { ok: false, error: new Error("No target specified for REST channel") };
+      }
+      return { ok: true, to };
+    },
+
+    sendText: async (ctx: {
+      cfg: Record<string, unknown>;
+      to: string;
       text: string;
-      account: ResolvedRestAccount;
-      conversationId?: string;
-      recipientId?: string;
-      logger?: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void };
+      accountId?: string | null;
+      [key: string]: unknown;
     }) => {
-      const logger = params.logger ?? {
-        info: console.log,
-        warn: console.warn,
-      };
-      return deliverOutbound({
-        account: params.account,
-        conversationId: params.conversationId ?? "unknown",
-        recipientId: params.recipientId ?? "unknown",
-        text: params.text,
-        logger,
+      const account = resolveAccount(ctx.cfg, ctx.accountId);
+      if (!account) {
+        return {
+          channel: CHANNEL_ID,
+          messageId: generateMessageId(),
+        };
+      }
+      const result = await deliverOutbound({
+        account,
+        conversationId: ctx.to,
+        recipientId: ctx.to,
+        text: ctx.text,
+        logger: { info: console.log, warn: console.warn },
       });
-    }
+      return {
+        channel: CHANNEL_ID,
+        messageId: generateMessageId(),
+        conversationId: ctx.to,
+        ...(result.ok ? {} : { meta: { error: result.error } }),
+      };
+    },
+
+    sendMedia: async (ctx: {
+      cfg: Record<string, unknown>;
+      to: string;
+      text: string;
+      mediaUrl?: string;
+      mediaLocalRoots?: readonly string[];
+      accountId?: string | null;
+      [key: string]: unknown;
+    }) => {
+      const account = resolveAccount(ctx.cfg, ctx.accountId);
+      if (!account) {
+        return {
+          channel: CHANNEL_ID,
+          messageId: generateMessageId(),
+        };
+      }
+      const mediaPaths = ctx.mediaUrl ? [ctx.mediaUrl] : undefined;
+
+      // Resolve the state directory so relative media paths work correctly
+      let stateDir: string | undefined;
+      try {
+        const rt = getRestRuntime();
+        stateDir = rt.state.resolveStateDir();
+      } catch {
+        // Runtime may not be available in all outbound contexts
+      }
+
+      const result = await deliverOutbound({
+        account,
+        conversationId: ctx.to,
+        recipientId: ctx.to,
+        text: ctx.text,
+        mediaPaths,
+        stateDir,
+        logger: { info: console.log, warn: console.warn },
+      });
+      return {
+        channel: CHANNEL_ID,
+        messageId: generateMessageId(),
+        conversationId: ctx.to,
+        ...(result.ok ? {} : { meta: { error: result.error } }),
+      };
+    },
   },
 
   // -------------------------------------------------------------------------
