@@ -293,8 +293,21 @@ const restChannelPlugin = {
           }
 
           log?.info?.(
-            `[rest-channel] Received message from "${message.senderId}" with ${Object.keys(mediaFields).length} attachment(s)`,
+            `[rest-channel] Received message from "${message.senderId}" with ${mediaPaths.length} attachment(s)`,
           );
+
+          // Resolve agent routing (generates proper sessionKey + agentId
+          // so sessions appear in the OpenClaw web chat UI).
+          const peerId = message.conversationId ?? message.senderId;
+          const route = rt.channel.routing.resolveAgentRoute({
+            cfg: currentCfg,
+            channel: CHANNEL_ID,
+            accountId: resolvedAccount.accountId,
+            peer: {
+              kind: message.isGroup ? "group" : "direct",
+              id: peerId,
+            },
+          });
 
           // Build MsgContext using SDK's finalizeInboundContext
           const msgCtx = rt.channel.reply.finalizeInboundContext({
@@ -302,11 +315,11 @@ const restChannelPlugin = {
             RawBody: message.text ?? "",
             CommandBody: message.text ?? "",
             From: `rest:${message.senderId}`,
-            To: `rest:${message.senderId}`,
-            SessionKey: `rest:${resolvedAccount.accountId}:${message.conversationId ?? message.senderId}`,
-            AccountId: resolvedAccount.accountId,
+            To: `rest:${peerId}`,
+            SessionKey: route.sessionKey,
+            AccountId: route.accountId,
             OriginatingChannel: CHANNEL_ID,
-            OriginatingTo: `rest:${message.senderId}`,
+            OriginatingTo: `rest:${peerId}`,
             ChatType: message.isGroup ? "group" : "direct",
             SenderName: message.senderName ?? message.senderId,
             SenderId: message.senderId,
@@ -316,6 +329,20 @@ const restChannelPlugin = {
             Timestamp: Date.now(),
             CommandAuthorized: true,
             ...mediaFields,
+          });
+
+          // Persist session so chat history is visible in the web UI
+          const storePath = rt.channel.session.resolveStorePath(
+            (currentCfg as Record<string, any>).session?.store,
+            { agentId: route.agentId },
+          );
+          await rt.channel.session.recordInboundSession({
+            storePath,
+            sessionKey: msgCtx.SessionKey ?? route.sessionKey,
+            ctx: msgCtx,
+            onRecordError: (err) => {
+              log?.warn?.(`[rest-channel] Failed updating session meta: ${String(err)}`);
+            },
           });
 
           // Dispatch through OpenClaw's AI pipeline and deliver via webhook
