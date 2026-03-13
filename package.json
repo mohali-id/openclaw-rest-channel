@@ -10,6 +10,7 @@
     "type": "git",
     "url": "git@github.com:mohali-id/openclaw-rest-channel.git"
   },
+  "homepage": "https://github.com/mohali-id/openclaw-rest-channel#readme",
   "keywords": [
     "openclaw",
     "plugin",
